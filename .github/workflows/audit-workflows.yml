@@ -1,0 +1,68 @@
+name: Audit Workflow Changes
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect dangerous commands
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Scanning workflow files for dangerous patterns..."
+
+          # Find changed workflow files in this ref compared to the default branch.
+          base_ref="origin/main"
+          git fetch origin main --depth=1
+
+          changed_files=$(git diff --name-only "$base_ref"...HEAD -- ".github/workflows/")
+          if [ -z "$changed_files" ]; then
+            echo "No workflow files changed."
+            exit 0
+          fi
+
+          echo "Changed workflow files:"
+          echo "$changed_files"
+
+          # Patterns for dangerous commands. Keep this list tight and explicit.
+          patterns=(
+            "curl .*api.github.com.*DELETE"
+            "gh api .* -X DELETE"
+            "az resource delete"
+            "aws .*delete"
+            "gcloud .*delete"
+            "rm -rf /"
+          )
+
+          failures=0
+          for file in $changed_files; do
+            for pattern in "${patterns[@]}"; do
+              if grep -Eiq "$pattern" "$file"; then
+                echo "Dangerous pattern detected in $file: $pattern"
+                failures=1
+              fi
+            done
+          done
+
+          if [ "$failures" -ne 0 ]; then
+            echo "Audit failed due to dangerous patterns."
+            exit 1
+          fi
+
+          echo "Audit passed."
